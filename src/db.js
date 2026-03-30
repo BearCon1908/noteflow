@@ -7,14 +7,24 @@ export async function fetchMeetings() {
     .from("meetings")
     .select("*")
     .order("created_at", { ascending: false });
-  if (error) throw error;
-  return data;
+
+  if (error) {
+    console.error("[Noteflow DB] fetchMeetings error:", error.message, error.details, error.hint);
+    throw error;
+  }
+  return data || [];
 }
 
 export async function createMeeting(meeting) {
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    console.error("[Noteflow DB] getUser error:", authError);
+    throw authError || new Error("No user session");
+  }
 
   const { data, error } = await supabase
     .from("meetings")
@@ -28,12 +38,15 @@ export async function createMeeting(meeting) {
     })
     .select()
     .single();
-  if (error) throw error;
+
+  if (error) {
+    console.error("[Noteflow DB] createMeeting error:", error.message, error.details, error.hint, error.code);
+    throw error;
+  }
   return data;
 }
 
 export async function updateMeeting(id, fields) {
-  // Map camelCase to snake_case
   const mapped = {};
   if ("title" in fields) mapped.title = fields.title;
   if ("notes" in fields) mapped.notes = fields.notes;
@@ -41,21 +54,26 @@ export async function updateMeeting(id, fields) {
   if ("summary" in fields) mapped.summary = fields.summary;
   if ("hasSummary" in fields) mapped.has_summary = fields.hasSummary;
 
-  mapped.updated_at = new Date().toISOString();
-
   const { data, error } = await supabase
     .from("meetings")
     .update(mapped)
     .eq("id", id)
     .select()
     .single();
-  if (error) throw error;
+
+  if (error) {
+    console.error("[Noteflow DB] updateMeeting error:", error.message, error.details, error.hint, error.code);
+    throw error;
+  }
   return data;
 }
 
 export async function deleteMeeting(id) {
   const { error } = await supabase.from("meetings").delete().eq("id", id);
-  if (error) throw error;
+  if (error) {
+    console.error("[Noteflow DB] deleteMeeting error:", error.message, error.details, error.hint);
+    throw error;
+  }
 }
 
 // --- Helper to convert DB row → app format ---

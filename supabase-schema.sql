@@ -1,56 +1,51 @@
 -- =============================================================
 -- Noteflow — Supabase Database Schema
 -- =============================================================
--- Run this in your Supabase SQL Editor (Dashboard → SQL Editor)
+-- HOW TO USE:
+--   1. Go to your Supabase Dashboard
+--   2. Click "SQL Editor" in the left sidebar
+--   3. Click "New query"
+--   4. Paste this ENTIRE file and click "Run"
+--
+--   If it fails, try running each numbered section separately.
 -- =============================================================
 
--- 1. Create the meetings table
-create table if not exists public.meetings (
+
+-- STEP 1: Create the meetings table
+create table public.meetings (
   id          uuid default gen_random_uuid() primary key,
   user_id     uuid references auth.users(id) on delete cascade not null,
-  title       text default '',
-  notes       text default '',
-  transcript  text default '',
-  summary     text default '',
-  has_summary boolean default false,
-  created_at  timestamptz default now(),
-  updated_at  timestamptz default now()
+  title       text default '' not null,
+  notes       text default '' not null,
+  transcript  text default '' not null,
+  summary     text default '' not null,
+  has_summary boolean default false not null,
+  created_at  timestamptz default now() not null,
+  updated_at  timestamptz default now() not null
 );
 
--- 2. Enable Row Level Security
+
+-- STEP 2: Enable Row Level Security
 alter table public.meetings enable row level security;
 
--- 3. RLS Policies — users can only access their own meetings
-create policy "Users can view their own meetings"
+
+-- STEP 3: Create RLS policies (users can only access their own data)
+create policy "select own meetings"
   on public.meetings for select
-  using (auth.uid() = user_id);
+  using ( auth.uid() = user_id );
 
-create policy "Users can create their own meetings"
+create policy "insert own meetings"
   on public.meetings for insert
-  with check (auth.uid() = user_id);
+  with check ( auth.uid() = user_id );
 
-create policy "Users can update their own meetings"
+create policy "update own meetings"
   on public.meetings for update
-  using (auth.uid() = user_id);
+  using ( auth.uid() = user_id );
 
-create policy "Users can delete their own meetings"
+create policy "delete own meetings"
   on public.meetings for delete
-  using (auth.uid() = user_id);
+  using ( auth.uid() = user_id );
 
--- 4. Index for faster queries
-create index if not exists meetings_user_id_idx on public.meetings (user_id);
-create index if not exists meetings_created_at_idx on public.meetings (created_at desc);
 
--- 5. Auto-update the updated_at timestamp
-create or replace function public.handle_updated_at()
-returns trigger as $$
-begin
-  new.updated_at = now();
-  return new;
-end;
-$$ language plpgsql;
-
-create trigger set_updated_at
-  before update on public.meetings
-  for each row
-  execute function public.handle_updated_at();
+-- STEP 4: Add index for faster lookups
+create index meetings_user_id_idx on public.meetings (user_id);
