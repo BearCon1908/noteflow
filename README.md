@@ -15,6 +15,7 @@ A meeting notes app that combines written and audio notes, generates AI-powered 
 
 - **Frontend**: React 18 + Vite
 - **Backend**: Vercel Serverless Functions (API proxy)
+- **Database**: Supabase (Postgres + Auth)
 - **AI**: Anthropic Claude API (Sonnet)
 - **Hosting**: Vercel (free tier)
 
@@ -22,7 +23,16 @@ A meeting notes app that combines written and audio notes, generates AI-powered 
 
 ## Deploy to Vercel (Recommended)
 
-### 1. Push to GitHub
+### 1. Set Up Supabase
+
+1. Go to [supabase.com](https://supabase.com) and create a free account
+2. Create a new project (pick a region close to you)
+3. Once the project is ready, go to **SQL Editor** in the dashboard
+4. Paste the contents of `supabase-schema.sql` and click **Run**
+5. Go to **Settings → API** and copy your **Project URL** and **anon/public key**
+6. Go to **Authentication → URL Configuration** and add your Vercel URL to the **Redirect URLs** list (you can add it after the first deploy)
+
+### 2. Push to GitHub
 
 ```bash
 cd noteflow
@@ -32,30 +42,19 @@ git commit -m "Initial commit"
 gh repo create noteflow --public --push
 ```
 
-Or create a repo on github.com and push manually:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/noteflow.git
-git branch -M main
-git push -u origin main
-```
-
-### 2. Deploy on Vercel
+### 3. Deploy on Vercel
 
 1. Go to [vercel.com](https://vercel.com) and sign in with GitHub
-2. Click **"Add New Project"**
-3. Import your `noteflow` repository
-4. Vercel auto-detects Vite — no config changes needed
-5. **Add your environment variable**:
-   - Key: `ANTHROPIC_API_KEY`
-   - Value: your API key from [console.anthropic.com](https://console.anthropic.com/)
-6. Click **Deploy**
+2. Click **"Add New Project"** and import your `noteflow` repository
+3. **Add your environment variables**:
+   - `ANTHROPIC_API_KEY` — your Anthropic API key
+   - `VITE_SUPABASE_URL` — your Supabase project URL
+   - `VITE_SUPABASE_ANON_KEY` — your Supabase anon key
+4. Click **Deploy**
 
-Your app will be live at `https://noteflow-xxxxx.vercel.app` within ~60 seconds.
+### 4. Update Supabase Redirect URL
 
-### 3. Access from any device
-
-Open your Vercel URL on any phone, tablet, or computer. Done!
+After deploying, go back to **Supabase → Authentication → URL Configuration** and add your Vercel URL (e.g., `https://noteflow-xxx.vercel.app`) to the **Redirect URLs** list. This allows the magic link login to redirect back to your app.
 
 ---
 
@@ -67,7 +66,7 @@ npm install
 
 # Create your .env file
 cp .env.example .env
-# Edit .env and add your Anthropic API key
+# Edit .env and add your Anthropic API key + Supabase credentials
 
 # Start dev server (frontend on :5173, API auto-proxied)
 npm run dev
@@ -75,8 +74,7 @@ npm run dev
 
 Open [http://localhost:5173](http://localhost:5173).
 
-> **Note**: The Vite dev server proxies `/api/*` requests to Vercel's local dev.
-> For full local API support, install `vercel` CLI:
+> For full local API support with the serverless function, install the Vercel CLI:
 >
 > ```bash
 > npm i -g vercel
@@ -90,24 +88,28 @@ Open [http://localhost:5173](http://localhost:5173).
 ```
 noteflow/
 ├── api/
-│   └── chat.js          # Serverless API proxy (keeps API key secure)
+│   └── chat.js              # Serverless API proxy (keeps Anthropic key secure)
 ├── public/
 │   └── favicon.svg
 ├── src/
-│   ├── App.jsx          # Main app component
-│   └── main.jsx         # React entry point
-├── .env.example         # Environment variable template
+│   ├── App.jsx              # Main app with auth-aware UI
+│   ├── auth.jsx             # Auth context, magic link login, sign out
+│   ├── db.js                # Supabase CRUD operations for meetings
+│   ├── main.jsx             # React entry with AuthProvider
+│   └── supabaseClient.js    # Supabase client init
+├── supabase-schema.sql      # Database schema — run in Supabase SQL Editor
+├── .env.example             # Environment variable template
 ├── .gitignore
 ├── index.html
 ├── package.json
-├── vercel.json          # Vercel deployment config
+├── vercel.json
 └── vite.config.js
 ```
 
 ## Future Ideas
 
 - Real audio transcription via Whisper API
-- Persistent storage (database or localStorage)
 - Team sharing and collaboration
 - Calendar integration for auto-creating meetings
 - Export summaries as PDF
+- Real-time collaborative editing via Supabase Realtime

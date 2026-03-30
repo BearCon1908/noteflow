@@ -1,4 +1,6 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useAuth, signInWithEmail, signOut } from "./auth.jsx";
+import { fetchMeetings, createMeeting, updateMeeting as dbUpdate, deleteMeeting as dbDelete, dbToMeeting } from "./db.js";
 
 // --- API helper: all AI calls go through our server proxy ---
 async function aiChat(prompt, systemPrompt) {
@@ -468,25 +470,171 @@ function MeetingCard({ meeting, active, onClick, onDelete, canDelete }) {
   );
 }
 
+// --- Login Screen ---
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true); setError(null);
+    const { error } = await signInWithEmail(email);
+    if (error) setError(error.message);
+    else setSent(true);
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: t.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans',sans-serif" }}>
+      <div style={{ width: 400, padding: 40, background: t.surface, borderRadius: 20, border: `1px solid ${t.border}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 12, background: t.accentDim, border: `1px solid ${t.accent}33`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <I d={ic.notes} size={22} color={t.accent} />
+          </div>
+          <div>
+            <div style={{ color: t.text, fontSize: 22, fontWeight: 700, letterSpacing: "-0.02em" }}>Noteflow</div>
+            <div style={{ color: t.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase" }}>Meeting Intelligence</div>
+          </div>
+        </div>
+
+        {sent ? (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ width: 56, height: 56, borderRadius: "50%", background: t.successDim, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <I d={ic.check} size={24} color={t.success} />
+            </div>
+            <div style={{ color: t.text, fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Check your email</div>
+            <div style={{ color: t.textMuted, fontSize: 13, lineHeight: 1.6 }}>
+              We sent a login link to <span style={{ color: t.accent }}>{email}</span>. Click the link to sign in.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ color: t.text, fontSize: 16, fontWeight: 600, marginBottom: 4 }}>Sign in to get started</div>
+            <div style={{ color: t.textMuted, fontSize: 13, marginBottom: 24 }}>We'll send you a magic link — no password needed.</div>
+            <div>
+              <input
+                type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                onKeyDown={(e) => e.key === "Enter" && email && handleLogin(e)}
+                style={{ width: "100%", padding: "12px 14px", borderRadius: 10, background: t.bg, border: `1px solid ${t.border}`, color: t.text, fontSize: 14, outline: "none", marginBottom: 12, boxSizing: "border-box" }}
+              />
+              {error && <div style={{ color: t.danger, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+              <button onClick={handleLogin} disabled={!email || loading} style={{
+                width: "100%", padding: "12px 0", borderRadius: 10, background: t.accent,
+                border: "none", color: t.bg, fontSize: 14, fontWeight: 700, cursor: loading ? "wait" : "pointer",
+                opacity: !email ? 0.4 : 1, boxShadow: `0 2px 16px ${t.accentGlow}`,
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              }}>
+                {loading ? <><div className="spinner" /> Sending...</> : "Send Magic Link"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Debounce helper ---
+function useDebouncedSave(delay = 1500) {
+  const timers = useRef({});
+  return useCallback((id, fields) => {
+    if (timers.current[id]) clearTimeout(timers.current[id]);
+    timers.current[id] = setTimeout(async () => {
+      try { await dbUpdate(id, fields); } catch (e) { console.error("Auto-save failed:", e); }
+    }, delay);
+  }, [delay]);
+}
+
+// --- Save indicator ---
+function SaveIndicator({ saving }) {
+  return (
+    <div style={{
+      fontSize: 11, color: saving ? t.accent : t.textDim,
+      display: "flex", alignItems: "center", gap: 5, transition: "all 0.3s ease",
+    }}>
+      {saving ? <><div className="spinner" style={{ width: 10, height: 10, borderWidth: 1.5 }} /> Saving...</> : <><I d={ic.check} size={10} color={t.textDim} /> Saved</>}
+    </div>
+  );
+}
+
 // --- App ---
 export default function App() {
-  const [meetings, setMeetings] = useState([{ id: 1, title: "Weekly Standup", date: fmtDate(), notes: "", transcript: "", summary: "", hasSummary: false }]);
-  const [activeId, setActiveId] = useState(1);
+  const { session, loading: authLoading } = useAuth();
+  const [meetings, setMeetings] = useState([]);
+  const [activeId, setActiveId] = useState(null);
   const [tab, setTab] = useState("capture");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [dbLoading, setDbLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const debouncedSave = useDebouncedSave(1500);
+
+  // Load meetings from Supabase on login
+  useEffect(() => {
+    if (!session) { setDbLoading(false); return; }
+    setDbLoading(true);
+    fetchMeetings()
+      .then((rows) => {
+        const mapped = rows.map(dbToMeeting);
+        if (mapped.length > 0) {
+          setMeetings(mapped);
+          setActiveId(mapped[0].id);
+        } else {
+          // Create a first meeting for new users
+          createMeeting({ title: "My First Meeting" }).then((row) => {
+            const m = dbToMeeting(row);
+            setMeetings([m]);
+            setActiveId(m.id);
+          });
+        }
+      })
+      .catch((e) => console.error("Failed to load meetings:", e))
+      .finally(() => setDbLoading(false));
+  }, [session]);
 
   const active = meetings.find((m) => m.id === activeId);
-  const up = useCallback((f, v) => setMeetings((p) => p.map((m) => m.id === activeId ? { ...m, [f]: v } : m)), [activeId]);
 
-  const newMeeting = () => { const id = Date.now(); setMeetings((p) => [{ id, title: "", date: fmtDate(), notes: "", transcript: "", summary: "", hasSummary: false }, ...p]); setActiveId(id); setTab("capture"); };
-  const delMeeting = (id) => {
-    setMeetings((p) => {
-      const n = p.filter((m) => m.id !== id);
-      if (!n.length) { const nid = Date.now(); setActiveId(nid); return [{ id: nid, title: "", date: fmtDate(), notes: "", transcript: "", summary: "", hasSummary: false }]; }
-      if (id === activeId) setActiveId(n[0].id);
-      return n;
-    });
+  // Update local state + schedule debounced save to Supabase
+  const up = useCallback((field, value) => {
+    setMeetings((prev) => prev.map((m) => m.id === activeId ? { ...m, [field]: value } : m));
+    setSaving(true);
+    debouncedSave(activeId, { [field]: value });
+    // Clear saving indicator after debounce + buffer
+    setTimeout(() => setSaving(false), 2000);
+  }, [activeId, debouncedSave]);
+
+  const newMeeting = async () => {
+    try {
+      const row = await createMeeting({ title: "" });
+      const m = dbToMeeting(row);
+      setMeetings((prev) => [m, ...prev]);
+      setActiveId(m.id);
+      setTab("capture");
+    } catch (e) { console.error("Failed to create meeting:", e); }
+  };
+
+  const delMeeting = async (id) => {
+    try {
+      await dbDelete(id);
+      setMeetings((prev) => {
+        const n = prev.filter((m) => m.id !== id);
+        if (!n.length) {
+          // Create a new one if we deleted the last
+          createMeeting({ title: "" }).then((row) => {
+            const m = dbToMeeting(row);
+            setMeetings([m]);
+            setActiveId(m.id);
+          });
+          return prev; // keep stale until new one arrives
+        }
+        if (id === activeId) setActiveId(n[0].id);
+        return n;
+      });
+    } catch (e) { console.error("Failed to delete meeting:", e); }
   };
 
   const genSummary = async () => {
@@ -501,19 +649,31 @@ export default function App() {
     setSummaryLoading(false);
   };
 
+  // --- Global styles (shared between login and app) ---
+  const globalStyles = `
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&display=swap');
+    *{margin:0;padding:0;box-sizing:border-box}body{background:${t.bg};font-family:'DM Sans',sans-serif}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${t.border};border-radius:10px}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes spin{to{transform:rotate(360deg)}}
+    .spinner{width:14px;height:14px;border:2px solid ${t.border};border-top-color:${t.accent};border-radius:50%;animation:spin .7s linear infinite}
+    .spinner-lg{width:28px;height:28px;border:3px solid ${t.border};border-top-color:${t.accent};border-radius:50%;animation:spin .7s linear infinite}
+    input::placeholder,textarea::placeholder{color:${t.textDim}}
+  `;
+
+  // Auth loading
+  if (authLoading) return (<><style>{globalStyles}</style><div style={{ minHeight: "100vh", background: t.bg, display: "flex", alignItems: "center", justifyContent: "center" }}><div className="spinner-lg" /></div></>);
+
+  // Not logged in
+  if (!session) return (<><style>{globalStyles}</style><LoginScreen /></>);
+
+  // DB loading
+  if (dbLoading) return (<><style>{globalStyles}</style><div style={{ minHeight: "100vh", background: t.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}><div className="spinner-lg" /><div style={{ color: t.textMuted, fontSize: 13 }}>Loading your meetings...</div></div></>);
+
   const tabs = [{ id: "capture", label: "Capture", icon: ic.mic }, { id: "summary", label: "Summary", icon: ic.sparkle }, { id: "email", label: "Email", icon: ic.send }];
 
   return (
     <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Source+Serif+4:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:wght@400;500;600;700&display=swap');
-        *{margin:0;padding:0;box-sizing:border-box}body{background:${t.bg};font-family:'DM Sans',sans-serif}
-        ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${t.border};border-radius:10px}
-        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}@keyframes spin{to{transform:rotate(360deg)}}
-        .spinner{width:14px;height:14px;border:2px solid ${t.border};border-top-color:${t.accent};border-radius:50%;animation:spin .7s linear infinite}
-        .spinner-lg{width:28px;height:28px;border:3px solid ${t.border};border-top-color:${t.accent};border-radius:50%;animation:spin .7s linear infinite}
-        input::placeholder,textarea::placeholder{color:${t.textDim}}
-      `}</style>
+      <style>{globalStyles}</style>
       <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: t.bg }}>
         {/* Sidebar */}
         <div style={{ width: sidebarOpen ? 280 : 0, minWidth: sidebarOpen ? 280 : 0, background: t.surface, borderRight: `1px solid ${t.border}`, display: "flex", flexDirection: "column", transition: "all 0.3s ease", overflow: "hidden" }}>
@@ -529,12 +689,25 @@ export default function App() {
           <div style={{ flex: 1, overflowY: "auto", padding: "12px 10px" }}>
             {meetings.map((m) => <MeetingCard key={m.id} meeting={m} active={m.id === activeId} onClick={() => { setActiveId(m.id); setTab("capture"); }} onDelete={() => delMeeting(m.id)} canDelete={meetings.length > 1} />)}
           </div>
+          {/* User info + sign out */}
+          <div style={{ padding: "12px 16px", borderTop: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 28, height: 28, borderRadius: 8, background: t.accentDim, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <I d={ic.user} size={14} color={t.accent} />
+            </div>
+            <div style={{ flex: 1, overflow: "hidden" }}>
+              <div style={{ color: t.textMuted, fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{session.user.email}</div>
+            </div>
+            <button onClick={signOut} style={{ padding: "4px 10px", borderRadius: 6, background: "transparent", border: `1px solid ${t.border}`, color: t.textDim, fontSize: 11, cursor: "pointer" }}>
+              Sign Out
+            </button>
+          </div>
         </div>
         {/* Main */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ padding: "16px 28px", borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", gap: 16, background: t.surface }}>
             <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{ width: 36, height: 36, borderRadius: 8, background: t.surfaceAlt, border: `1px solid ${t.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><span style={{ color: t.textMuted, fontSize: 16 }}>{sidebarOpen ? "◀" : "▶"}</span></button>
             <input value={active?.title || ""} onChange={(e) => up("title", e.target.value)} placeholder="Meeting Title" style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: t.text, fontSize: 20, fontWeight: 700, letterSpacing: "-0.02em", fontFamily: "'DM Sans',sans-serif" }} />
+            <SaveIndicator saving={saving} />
             <div style={{ color: t.textDim, fontSize: 12, display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}><I d={ic.clock} size={12} color={t.textDim} />{active?.date}</div>
           </div>
           <div style={{ padding: "0 28px", borderBottom: `1px solid ${t.border}`, display: "flex", background: t.surface }}>
